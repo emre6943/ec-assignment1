@@ -1,0 +1,7 @@
+__data__/
+*.zip
+.venv/
+__pycache__/
+*.png
+*.sqlite
+.claude/
