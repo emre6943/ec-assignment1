@@ -45,6 +45,94 @@ Run from here against that environment:
 
 Output frames land in `__data__/`, which is not tracked.
 
+## Run
+
+Our code, next to the course files:
+
+    ea.py            the EA (block A) - tree genotype on ariel.ec, fitness from
+                     tree_edit_distance.py, one CLI flag per experiment setting
+    recombine.py     face-aligned multi-parent recombination (block B owns it;
+                     the signature is fixed, the internals may change)
+    tests/           pytest: 8 operator unit tests + 2 EA tests
+
+Both are complete and tested. Still missing: `baseline.py`, `plot.py`,
+`stats.py` and `run_all.sh` (block C), and the report (block D).
+
+One EA run, all defaults (k=2, seed 1, pop 50, 100 generations, cap 20 modules,
+tournament 3, p_xo 0.7):
+
+    uv run --project ../ariel python ea.py
+
+The experiment variable is `--parents`; `--seed` picks the repeat. Everything
+lands in `results/k<K>/seed<S>/` unless `--out` says otherwise:
+
+    uv run --project ../ariel python ea.py --parents 4 --seed 3
+    uv run --project ../ariel python ea.py --pop 10 --gens 5 --out /tmp/smoke   # ~1 s
+
+Flags: `--parents K` (2), `--seed S` (1), `--pop` (50), `--gens` (100),
+`--max-modules` (20, core included), `--tournament` (3), `--pxo` (0.7),
+`--out DIR`. `random`, `numpy` and `torch` are all seeded from `--seed`; the
+same seed reproduces the same `log.csv`.
+
+Each run writes:
+
+    log.csv       one row per generation, starting at gen 0 (the evaluated
+                  initial population), so `--gens G` gives G + 1 rows and
+                  evals == pop * (gen + 1) on every row. Columns: gen, evals,
+                  best, mean, worst, diversity (mean pairwise tree edit
+                  distance over a random sample of at most 20 survivors, drawn
+                  from its own RNG stream so the diagnostic never perturbs the
+                  evolution), fallbacks (cumulative count of recombinations
+                  that had to fall back to parent 0), cap_fallbacks (cumulative
+                  count of children replaced by a parent clone because 20
+                  shrink mutations could not get them under the module cap)
+    best.json     the best genome of the run as a TreeGenome dict
+    config.json   the CLI arguments the run was started with
+    database.db   ariel.ec's SQLite log of every individual, every generation
+
+`results/` is gitignored. A full run (50 x 100 = 5 000 evaluations + the
+initial 50, so 5 050 in total) takes about 11 s on a laptop, so the whole
+experiment - 3 variants x 5 seeds, plus the baseline - is a few minutes rather
+than an overnight job.
+
+The output directory is built from `--parents` and `--seed` only. `--pop`,
+`--gens` and `--pxo` do not appear in it, so two runs differing only in those
+would overwrite each other; pass `--out` explicitly when sweeping anything
+other than k and the seed.
+
+Reproducibility: the same flags give a byte-identical `log.csv` and
+`best.json` across separate processes and across different `PYTHONHASHSEED`
+values, and whether `--out` is a fresh directory or one that already holds a
+previous run. There are three seeded streams: the global `random` module (which
+is what ARIEL's own tree operators draw from), the EA's own `random.Random`
+(tournaments, the crossover coin flip, parent draws, mutation choice, and the
+`rng` handed to `recombine`), and a separate offset stream used only by the
+diversity diagnostic, so switching that diagnostic on or off cannot change the
+evolution. `recombine.py` has no generator of its own at all.
+
+`ea.py` deletes any old `database.db` itself before handing the path to
+`ariel.ec.EA`. That matters because ARIEL's own "deleting existing
+database" warning is rendered by Rich, Rich turns file paths into links, and
+`rich.style.Style` draws `random.randint()` for every linked style, which
+advances the global `random` module ARIEL's tree operators depend on. One
+hidden draw was enough to make a run into a reused directory diverge from a
+run into a fresh one. Do not print paths through Rich while a run is in
+progress for the same reason.
+
+Parents are drawn from the tournament winners weighted by the number of
+tournaments each won, but an individual is never used twice in one
+recombination unless fewer than k distinct winners exist, so "k parents"
+really means k different genomes.
+
+The operator's core faces come from ARIEL's own
+`ALLOWED_FACES[ModuleType.CORE]` rather than a hardcoded list, so if the course
+ever enables the TOP and BOTTOM faces the operator picks them up instead of
+silently discarding those subtrees.
+
+Tests:
+
+    uv run --project ../ariel python -m pytest tests -q
+
 ## Constraints
 
 Genome is either `ariel.ec.genotypes.nde` or `ariel.ec.genotypes.tree`. CPPN
