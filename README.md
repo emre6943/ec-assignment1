@@ -33,15 +33,40 @@ files alongside them.
 
 ## Setup
 
-Python 3.12 and MuJoCo 3.8.0, managed with uv from the ARIEL clone that sits
-next to this directory:
+This repo holds only our own code. It has no environment of its own - every
+command runs against the ARIEL clone, which must sit **next to** this directory
+and must be **named `ariel`**:
 
-    cd ../ariel
-    uv sync
+    EvolutionaryComputing/
+    |-- ariel/         <- the course fork, cloned and renamed (see below)
+    `-- assignment1/   <- this repo
 
-Run from here against that environment:
+From scratch:
 
-    uv run --project ../ariel python A1_template_2026.py
+    # 1. install uv, if you do not have it
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # 2. make the parent directory and clone both repos side by side
+    mkdir -p EvolutionaryComputing && cd EvolutionaryComputing
+    git clone https://github.com/AndrzejSzczepura/EvolutionaryComputing2026.git ariel
+    git clone https://github.com/emre6943/ec-assignment1.git assignment1
+
+    # 3. build the environment (Python 3.12 + MuJoCo 3.8.0, a few minutes)
+    cd ariel && uv sync && cd ../assignment1
+
+Note the trailing `ariel` on the first clone. Without it git creates
+`EvolutionaryComputing2026/`, and every command below - which all say
+`--project ../ariel` - fails with "No such file or directory". Renaming the
+folder afterwards is equally fine.
+
+Check it worked:
+
+    uv run --project ../ariel python A1_template_2026.py   # course template
+    uv run --project ../ariel python -m pytest tests -q    # our tests, 10 passing
+
+Both commands run from `assignment1/`, never from `ariel/`. There is no
+`uv sync` to run here and no virtualenv to activate - `--project ../ariel`
+points uv at the environment each time, so it has to be on every command.
 
 Output frames land in `__data__/`, which is not tracked.
 
