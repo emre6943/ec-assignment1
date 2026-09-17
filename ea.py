@@ -18,14 +18,9 @@ Two conventions that the logs and the report depend on:
 ``run(args)`` is importable for tests; ``main()`` only parses the CLI.
 """
 
-# No ``from __future__ import annotations`` here: ``EAOperation`` checks the
-# runtime annotation of its first parameter against ``Population``, and
-# stringified annotations fail that check.
-
 import argparse
 import copy
 import csv
-import json
 import random
 import sys
 import time
@@ -52,29 +47,26 @@ from ariel.ec.genotypes.tree.tree_genome import TreeGenome
 from ariel.ec.genotypes.tree.validation import validate_genome_dict
 
 import recombine as recombine_mod
-from recombine import module_count, recombine
-from tree_edit_distance import (
-    mean_plus_std_tree_edit_distance,
-    tree_edit_distance,
+from constants import (
+    DEFAULT_GENS,
+    DEFAULT_MAX_MODULES,
+    DEFAULT_POP,
+    DEFAULT_SEED,
+    DIVERSITY_SEED_OFFSET,
+    DIVERSITY_SAMPLE_SIZE,
+    LOG_COLUMNS,
+    MAX_SHRINK_ATTEMPTS,
+    MUTATION_PROBABILITIES,
+    RESULTS_DIR,
+    TARGET_DIR,
+    ea_result_dir,
 )
+from metrics import mean_pairwise_tree_distance
+from result_files import save_genome_outputs
+from recombine import module_count, recombine
+from tree_edit_distance import mean_plus_std_tree_edit_distance
 
 HERE = Path(__file__).parent
-TARGET_DIR = HERE / "target_bodies"
-
-MUTATION_PROBABILITIES: tuple[tuple[str, float], ...] = (
-    ("point", 0.4),
-    ("subtree", 0.4),
-    ("shrink", 0.1),
-    ("hoist", 0.1),
-)
-MAX_SHRINK_ATTEMPTS = 20
-DIVERSITY_SAMPLE_SIZE = 20
-DIVERSITY_SEED_OFFSET = 1_000_003
-
-LOG_COLUMNS = (
-    "gen", "evals", "best", "mean", "worst", "diversity",
-    "fallbacks", "cap_fallbacks",
-)
 
 console = Console()
 
@@ -302,12 +294,7 @@ class Experiment:
         size = min(DIVERSITY_SAMPLE_SIZE, len(alive))
         sample = self.diversity_rng.sample(alive, size)
         bodies = [genome_of(individual).to_networkx() for individual in sample]
-        distances = [
-            tree_edit_distance(one, other)
-            for index, one in enumerate(bodies)
-            for other in bodies[index + 1 :]
-        ]
-        return float(np.mean(distances)) if distances else 0.0
+        return mean_pairwise_tree_distance(bodies)
 
     def log(self, population: Population) -> Population:
         """Append one CSV row and print one line for the current generation."""
@@ -380,10 +367,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--parents", type=int, default=2, help="parents per recombination (k)",
     )
-    parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--pop", type=int, default=50)
-    parser.add_argument("--gens", type=int, default=100)
-    parser.add_argument("--max-modules", dest="max_modules", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--pop", type=int, default=DEFAULT_POP)
+    parser.add_argument("--gens", type=int, default=DEFAULT_GENS)
+    parser.add_argument(
+        "--max-modules", dest="max_modules", type=int, default=DEFAULT_MAX_MODULES,
+    )
     parser.add_argument("--tournament", type=int, default=3)
     parser.add_argument(
         "--pxo", type=float, default=0.7, help="recombination probability",
@@ -396,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def resolve_out(args: argparse.Namespace) -> Path:
     if args.out is None:
-        return HERE / "results" / f"k{args.parents}" / f"seed{args.seed}"
+        return ea_result_dir(RESULTS_DIR, args.parents, args.seed)
     return Path(args.out)
 
 
@@ -420,10 +409,7 @@ def run(args: argparse.Namespace) -> Path:
     best = experiment.evolve()
 
     best_genome = genome_of(best)
-    with (out / "best.json").open("w", encoding="utf-8") as handle:
-        json.dump(best_genome.to_dict(), handle, indent=2)
-    with (out / "config.json").open("w", encoding="utf-8") as handle:
-        json.dump({**vars(args), "out": str(out)}, handle, indent=2)
+    save_genome_outputs(out, args, best_genome)
 
     console.print(
         f"done: best {best.fitness:.4f} ({module_count(best_genome)} modules), "
