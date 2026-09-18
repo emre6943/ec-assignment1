@@ -24,7 +24,7 @@ def test_ea_smoke(tmp_path):
     assert [r["gen"] for r in rows] == ["0", "1", "2", "3"]
     assert set(rows[0]) == {
         "gen", "evals", "best", "mean", "worst", "diversity",
-        "fallbacks", "cap_fallbacks",
+        "fallbacks", "cap_fallbacks", "forced_mutations",
     }
     bests = [float(r["best"]) for r in rows]
     assert bests == sorted(bests, reverse=True)  # mu+lambda: best never gets worse

@@ -26,6 +26,7 @@ import argparse
 import copy
 import csv
 import json
+import math
 import random
 import sys
 import time
@@ -73,18 +74,21 @@ DIVERSITY_SEED_OFFSET = 1_000_003
 
 LOG_COLUMNS = (
     "gen", "evals", "best", "mean", "worst", "diversity",
-    "fallbacks", "cap_fallbacks",
+    "fallbacks", "cap_fallbacks", "forced_mutations",
 )
 
 console = Console()
 
-
 def load_targets(target_dir: Path = TARGET_DIR) -> list[nx.DiGraph]:
+    """Load the five target bodies from JSON files in ``target_dir``."""
     paths = sorted(target_dir.glob("*.json"))
     if not paths:
         msg = f"no target bodies found in {target_dir}"
         raise FileNotFoundError(msg)
-    return [load_graph_from_json(path) for path in paths]
+    targets = []
+    for path in paths:
+        targets.append(load_graph_from_json(path))
+    return targets
 
 
 def fitness_function(body: nx.DiGraph, targets: list[nx.DiGraph]) -> float:
@@ -132,6 +136,7 @@ class Experiment:
         self.generation = 0
         self.evals = 0
         self.cap_fallbacks = 0
+        self.forced_mutations = 0
         self.log_path = out / "log.csv"
         self.started_at = time.time()
 
@@ -148,37 +153,73 @@ class Experiment:
         return population
 
     def tournament(self, candidates: list[Individual]) -> Individual:
-        """Run one tournament. ``min`` wins because lower fitness is better."""
-        size = min(self.args.tournament, len(candidates))
+        """Pick a few individuals at random; the fittest of them wins.
+
+        Lower fitness is better here, so the winner is the one with the
+        SMALLEST fitness. On a tie the first one drawn wins.
+        """
+        # Never ask for more contestants than there are individuals
+        size = self.args.tournament
+        if size > len(candidates):
+            size = len(candidates)
+
+        # sample draws DISTINCT individuals, so nobody competes with itself.
         contestants = self.rng.sample(candidates, size)
-        return min(contestants, key=lambda individual: individual.fitness)
+
+        winner = contestants[0]
+        for contestant in contestants[1:]:
+            if contestant.fitness < winner.fitness:
+                winner = contestant
+        return winner
+
+    def award_slot(self, individual: Individual) -> None:
+        """Give one parent slot to an individual, counting repeat wins."""
+        wins_so_far = int(individual.tags["ps_wins"])
+        individual.tags["ps"] = True
+        individual.tags["ps_wins"] = wins_so_far + 1
 
     def parent_selection(self, population: Population) -> Population:
-        """Run ``pop`` tournaments and tag the winners on the individuals.
+        """Fill ``pop`` parent slots: most by tournament, a few at random.
 
-        ARIEL operations must take and return a ``Population``, so the winners
-        are recorded as tags rather than returned: ``ps`` marks a winner and
-        ``ps_wins`` counts how many tournaments it took. ``mating_pool`` turns
-        those counts back into a list, which is where selection pressure
-        actually comes from.
+        ARIEL operations must return a ``Population``, so the winners are
+        written onto the individuals as tags instead of being returned.
+        ``mating_pool`` reads them back.
         """
         alive = population.alive.to_list()
+
+        # Clear last generation's tags.
         for individual in alive:
             individual.tags["ps"] = False
             individual.tags["ps_wins"] = 0
-        for _ in range(self.args.pop):
-            winner = self.tournament(alive)
-            winner.tags["ps"] = True
-            winner.tags["ps_wins"] = int(winner.tags.get("ps_wins", 0)) + 1
+
+        # A fraction of the slots ignore fitness completely.
+        # ceil, not int: 1% of a 50-individual population is 0.5 slots,
+        # which would floor to 0 and silently switch the feature off while
+        # the config still claimed it was on. Any rate above 0 buys >= 1 slot.
+        num_random = math.ceil(self.args.pop * self.args.immigrants)
+        num_tournaments = self.args.pop - num_random
+
+        # One winner each. The same individual can win several times.
+        for _ in range(num_tournaments):
+            self.award_slot(self.tournament(alive))
+
+        # Random reward becuase life
+        for _ in range(num_random):
+            self.award_slot(self.rng.choice(alive))
+
         return population
 
     def mating_pool(self, population: Population) -> list[Individual]:
-        """List every tournament winner once per win it scored."""
+        """List every individual holding a parent slot, once per slot."""
         pool: list[Individual] = []
         for individual in population.alive:
-            if individual.tags.get("ps"):
-                wins = int(individual.tags.get("ps_wins", 1))
-                pool.extend([individual] * wins)
+            if not individual.tags.get("ps"):
+                continue  # never won a tournament, so it does not breed
+            # One slot per win. An individual that won 5 tournaments appears
+            # 5 times and is therefore 5x as likely to be picked as a parent.
+            wins = int(individual.tags.get("ps_wins", 1))
+            for _ in range(wins):
+                pool.append(individual)
         if not pool:
             console.log("[yellow]no tagged parents - using whole population[/yellow]")
             pool = population.alive.to_list()
@@ -223,16 +264,26 @@ class Experiment:
         """
         remaining = list(pool)
         chosen: list[Individual] = []
+
         while remaining and len(chosen) < count:
             pick = self.rng.choice(remaining)
             chosen.append(pick)
-            remaining = [ind for ind in remaining if ind is not pick]
+
+            # Drop EVERY slot belonging to that individual
+            still_available = []
+            for candidate in remaining:
+                if candidate is not pick:
+                    still_available.append(candidate)
+            remaining = still_available
+
+        # Only reachable when there were fewer distinct winners than parents
         if len(chosen) < count:
-            chosen.extend(self.rng.choices(chosen, k=count - len(chosen)))
+            shortfall = count - len(chosen)
+            chosen.extend(self.rng.choices(chosen, k=shortfall))
         return chosen
 
     def make_child(self, pool: list[Individual]) -> TreeGenome:
-        """Build one child: recombine or clone, then always mutate exactly once.
+        """Build one child: recombine or clone, then usually mutate it once.
 
         The two ``return copy.deepcopy(parents[0])`` branches are safety nets,
         not normal paths: a child that cannot be shrunk under the module cap,
@@ -240,16 +291,26 @@ class Experiment:
         by an unmodified parent so nothing invalid can enter the population.
         Both read 0 in practice and are reported in the log.
         """
-        if self.rng.random() < self.args.pxo:
+        recombined = self.rng.random() < self.args.pxo # probability of recombination
+        if recombined:
             chosen = self.draw_parents(pool, self.args.parents)
-            parents = [genome_of(individual) for individual in chosen]
+            parents = []
+            for individual in chosen:
+                parents.append(genome_of(individual))
             child = recombine(parents, self.rng)
         else:
             parents = [genome_of(self.rng.choice(pool))]
             child = copy.deepcopy(parents[0])
 
-        self.mutate_once(child)
+        mutated = self.rng.random() < self.args.pmut
+        if mutated:
+            self.mutate_once(child)
+        elif not recombined:
+            # if the child is a clone then force mutation to avoid exact copies of the parent
+            self.mutate_once(child)
+            self.forced_mutations += 1
 
+        # fallbacks
         if not self.enforce_cap(child):
             self.cap_fallbacks += 1
             return copy.deepcopy(parents[0])
@@ -260,21 +321,23 @@ class Experiment:
         return child
 
     def reproduction(self, population: Population) -> Population:
-        """Append ``pop`` children, so the population briefly holds 2 x pop."""
+        """Append ``pop`` children to the population.
+
+        The population holds 2 x pop ALIVE individuals until
+        ``survivor_selection`` culls it back
+        """
         pool = self.mating_pool(population)
-        children = [
-            new_individual(self.make_child(pool))
-            for _ in range(self.args.pop)
-        ]
+
+        children = []
+        for _ in range(self.args.pop):
+            child_genome = self.make_child(pool)
+            children.append(new_individual(child_genome))
+
         population.extend(children)
         return population
 
     def evaluate(self, population: Population) -> Population:
-        """Evaluate whatever still needs it.
-
-        ARIEL clears ``requires_eval`` inside the ``fitness`` setter, so nobody
-        is scored twice and the run lands on exactly pop x (gens + 1) evals.
-        """
+        """Evaluate whatever still needs it."""
         for individual in population:
             if individual.alive and individual.requires_eval:
                 body = genome_of(individual).to_networkx()
@@ -283,36 +346,53 @@ class Experiment:
         return population
 
     def survivor_selection(self, population: Population) -> Population:
-        """mu + lambda: keep the best ``pop`` of parents and children together.
-
-        Losers are flagged rather than removed - ARIEL keeps them in the list
-        for the database log, and ``population.alive`` filters them everywhere
-        else. Identity is compared with ``id`` because individuals are not
-        hashable by value.
-        """
+        """mu + lambda: keep the best ``pop`` of parents and children together."""
+        # Parents and children together, sorted best (lowest) fitness first.
         ranked = population.alive.sort(sort="min", attribute="fitness_")
-        survivors = {id(individual) for individual in ranked[: self.args.pop]}
+        best = ranked[: self.args.pop]
+
+        # id() because Individual is not hashable by value, so we cannot put
+        # the objects themselves in a set.
+        survivor_ids = set()
+        for individual in best:
+            survivor_ids.add(id(individual))
+
         for individual in population:
-            if id(individual) not in survivors:
+            if id(individual) not in survivor_ids:
                 individual.alive = False
         return population
 
     def diversity(self, alive: list[Individual]) -> float:
         """Mean pairwise tree edit distance over a sample of the survivors."""
-        size = min(DIVERSITY_SAMPLE_SIZE, len(alive))
+        size = DIVERSITY_SAMPLE_SIZE
+        if size > len(alive):
+            size = len(alive)
         sample = self.diversity_rng.sample(alive, size)
-        bodies = [genome_of(individual).to_networkx() for individual in sample]
-        distances = [
-            tree_edit_distance(one, other)
-            for index, one in enumerate(bodies)
-            for other in bodies[index + 1 :]
-        ]
-        return float(np.mean(distances)) if distances else 0.0
+
+        bodies = []
+        for individual in sample:
+            bodies.append(genome_of(individual).to_networkx())
+
+        # Every unordered pair exactly once: bodies[index + 1:] starts after
+        # the current body, so we never compare a body with itself and never
+        # count the pair (a, b) and then (b, a).
+        distances = []
+        for index, one in enumerate(bodies):
+            for other in bodies[index + 1 :]:
+                distances.append(tree_edit_distance(one, other))
+
+        if not distances:  # a population of one has no pairs
+            return 0.0
+        return float(np.mean(distances))
 
     def log(self, population: Population) -> Population:
         """Append one CSV row and print one line for the current generation."""
         alive = population.alive.to_list()
-        fitnesses = [individual.fitness for individual in alive]
+
+        fitnesses = []
+        for individual in alive:
+            fitnesses.append(individual.fitness)
+
         best = min(fitnesses)
         mean = float(np.mean(fitnesses))
         worst = max(fitnesses)
@@ -323,12 +403,13 @@ class Experiment:
             csv.writer(handle).writerow([
                 self.generation, self.evals,
                 f"{best:.4f}", f"{mean:.4f}", f"{worst:.4f}", f"{diversity:.4f}",
-                fallbacks, self.cap_fallbacks,
+                fallbacks, self.cap_fallbacks, self.forced_mutations,
             ])
         console.print(
             f"gen {self.generation:>3} ev {self.evals:>5} "
             f"best {best:6.2f} mean {mean:6.2f} worst {worst:6.2f} "
             f"div {diversity:5.2f} fb {fallbacks} cap {self.cap_fallbacks} "
+            f"fm {self.forced_mutations} "
             f"{time.time() - self.started_at:.0f}s",
             highlight=False,
         )
@@ -386,7 +467,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-modules", dest="max_modules", type=int, default=20)
     parser.add_argument("--tournament", type=int, default=3)
     parser.add_argument(
-        "--pxo", type=float, default=0.7, help="recombination probability",
+        "--immigrants",
+        type=float,
+        default=0.01,
+        help="fraction of parent slots drawn at random, ignoring fitness "
+             "(rounded up, so any value > 0 gives at least one slot)",
+    )
+    parser.add_argument(
+        "--pxo", type=float, default=0.8, help="recombination probability",
+    )
+    parser.add_argument(
+        "--pmut",
+        type=float,
+        default=0.8,
+        help="mutation probability; a cloned child that skips it is mutated "
+             "anyway, so no child is ever an exact copy of its parent",
     )
     parser.add_argument(
         "--out", type=str, default=None, help="default results/k{K}/seed{S}",

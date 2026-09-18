@@ -12,13 +12,28 @@ too many parents disrupts useful genetic structure and therefore reduces converg
 recombination), one variable: number of parents k ∈ {2, 4, 8}. k=2 is the control. Everything
 else fixed. Plus a random-search baseline at the same evaluation budget.
 
-Fixed settings (do not change between variants):
+Fixed settings (do not change between variants) — these are the `ea.py` CLI defaults,
+so a variant run only needs `--parents k --seed s`:
 - population 50, 100 generations → **5 050** evaluations per run (gen 0 = the initial 50 + 100 × 50)
-- tournament parent selection, k_tournament = 3
-- crossover probability 0.7, then exactly one mutation (point / subtree / shrink / hoist)
+- tournament parent selection, k_tournament = 3 (`--tournament 3`)
+- **`--immigrants 0.01`** — ⌈0.01 × 50⌉ = **1** of the 50 parent slots per generation is filled by
+  an individual drawn uniformly at random, fitness ignored, so weak-but-different bodies still
+  breed. Note the ceiling: plain flooring would give 0 slots and silently disable it.
+- **crossover probability 0.8** (`--pxo 0.8`) — ~40 of 50 children are recombined from k parents,
+  the other ~10 are clones of a single parent
+- **mutation probability 0.8** (`--pmut 0.8`) — exactly one mutation
+  (point 0.4 / subtree 0.4 / shrink 0.1 / hoist 0.1). A child that was *cloned* and then skipped
+  mutation is mutated anyway, so no child is ever an exact duplicate of its parent; those are
+  counted in the `forced_mutations` log column
 - survivor selection μ+λ (keep best 50 of parents + children)
+- module cap 20, enforced after variation (`--max-modules 20`)
 - 5 seeds per variant: 1, 2, 3, 4, 5
 - fitness = mean tree edit distance to the 5 targets + 1 std (lower is better), from the template
+
+⚠️ **Seed-to-seed spread swamps parameter differences.** Measured on k=4, three seeds: best
+fitness varied by up to 0.88 between seeds while `--pmut 0.8` vs `1.0` was indistinguishable.
+Never conclude anything from a single run — this is why the assignment demands 5 seeds with
+mean and spread.
 
 ---
 
@@ -28,14 +43,17 @@ Fixed settings (do not change between variants):
       from `ariel/examples/c_genotypes/1_body_evolution_tree.py`, fitness swapped for the
       template's `fitness_function`
 - [x] CLI flags: `--parents k`, `--seed s`, `--pop`, `--gens`, `--out`
-      (plus `--max-modules`, `--tournament`, `--pxo`)
+      (plus `--max-modules`, `--tournament`, `--pxo`, `--pmut`, `--immigrants`)
 - [x] seed `random`, `numpy` (and `torch`, harmless) from `--seed`
-- [x] tournament parent selection (k_tournament = 3), tag parents
-- [x] reproduction: with p = 0.7 pick k parents, call multi-parent recombination; else clone one
-      parent. Then one mutation. Enforce ≤ 20 modules (shrink/prune until under the cap)
+- [x] tournament parent selection (k_tournament = 3), tag parents, plus 1 random-immigrant
+      parent slot per generation (`--immigrants`)
+- [x] reproduction: with p = 0.8 pick k parents, call multi-parent recombination; else clone one
+      parent. Then one mutation with p = 0.8 (forced on unrecombined clones). Enforce ≤ 20
+      modules (shrink/prune until under the cap)
 - [x] μ+λ survivor selection
-- [x] per-generation log of best / mean / worst fitness to CSV as well as the ariel SQLite DB
-      (CSV is what the plot script reads; DB is the backup)
+- [x] per-generation log to CSV as well as the ariel SQLite DB (CSV is what the plot script
+      reads; DB is the backup). Columns: `gen, evals, best, mean, worst, diversity, fallbacks,
+      cap_fallbacks, forced_mutations`
 - [x] save best genome of the run as JSON
 - [x] smoke test: `--pop 10 --gens 5` runs end to end in under a minute (takes ~1 s)
 
