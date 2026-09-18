@@ -1,5 +1,3 @@
-"""Random-search baseline runner."""
-
 import argparse
 import csv
 import time
@@ -23,8 +21,6 @@ from recombine import module_count
 from result_files import save_genome_outputs
 
 console = Console()
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="EC A1 - random-search baseline",
@@ -41,16 +37,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--out",
         type=str,
-        default=None,
+        default= None,
         help="default results/random/seed{S}",
     )
     return parser
-
-
 def resolve_out(args: argparse.Namespace) -> Path:
     if args.out:
         return Path(args.out)
     return baseline_result_dir(RESULTS_DIR, args.seed)
+
+
 
 
 def write_log_row(writer: csv.writer, stats: GenerationStats) -> None:
@@ -75,16 +71,13 @@ def print_generation(stats: GenerationStats, started_at: float) -> None:
         f"{time.time() - started_at:.0f}s",
         highlight=False,
     )
-
-
 def run(args: argparse.Namespace) -> Path:
-    out = resolve_out(args)
+    out= resolve_out(args)
     out.mkdir(parents=True, exist_ok=True)
     seed_everything(args.seed)
-
-    targets = load_targets()
+    targets =load_targets()
     best: EvaluatedGenome | None = None
-    started_at = time.time()
+    started_at=time.time()
 
     console.rule(
         f"[bold]Random baseline  seed={args.seed}  "
@@ -92,16 +85,16 @@ def run(args: argparse.Namespace) -> Path:
     )
 
     with (out / "log.csv").open("w", newline="") as handle:
-        writer = csv.writer(handle)
+        writer =csv.writer(handle)
         writer.writerow(LOG_COLUMNS)
 
         for generation in range(args.gens + 1):
-            batch = evaluate_batch(args.pop, args.max_modules, targets)
-            batch_best = best_in(batch)
+            batch= evaluate_batch(args.pop, args.max_modules, targets)
+            batch_best= best_in(batch)
             if best is None or batch_best.fitness < best.fitness:
-                best = batch_best
+                best= batch_best
 
-            stats = summarize_generation(
+            stats=summarize_generation(
                 generation,
                 args.pop,
                 batch,
@@ -111,7 +104,7 @@ def run(args: argparse.Namespace) -> Path:
             print_generation(stats, started_at)
 
     if best is None:
-        msg = "random baseline evaluated no genomes"
+        msg ="random baseline evaluated no genomes"
         raise RuntimeError(msg)
 
     save_genome_outputs(out, args, best.genome)
@@ -122,7 +115,6 @@ def run(args: argparse.Namespace) -> Path:
         highlight=False,
     )
     return out
-
 
 def main(argv: list[str] | None = None) -> None:
     run(build_parser().parse_args(argv))

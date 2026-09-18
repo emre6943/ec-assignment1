@@ -5,9 +5,8 @@ import numpy as np
 
 from tree_edit_distance import tree_edit_distance
 
-
 def mean_pairwise_tree_distance(bodies: list[nx.DiGraph]) -> float:
-    distances = [
+    distances= [
         tree_edit_distance(one, other)
         for index, one in enumerate(bodies)
         for other in bodies[index + 1 :]

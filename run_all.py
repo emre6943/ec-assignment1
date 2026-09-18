@@ -1,5 +1,3 @@
-"""Run the full assignment experiment and evaluation."""
-
 import argparse
 from pathlib import Path
 
@@ -10,9 +8,8 @@ from constants import DEFAULT_VARIANTS, baseline_result_dir, ea_result_dir
 from constants import DEFAULT_POP, RESULTS_DIR
 from evaluation import plot, statistics
 
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser =argparse.ArgumentParser(
         description="Run all assignment experiments",
     )
     parser.add_argument("--results", type=Path, default=RESULTS_DIR)
@@ -30,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
 def should_run(out: Path, force: bool) -> bool:
     if force:
         return True
@@ -37,6 +35,7 @@ def should_run(out: Path, force: bool) -> bool:
         print(f"skip existing {out}")
         return False
     return True
+
 
 
 def experiment_args(args: argparse.Namespace, seed: int, out: Path) -> list[str]:
@@ -50,14 +49,13 @@ def experiment_args(args: argparse.Namespace, seed: int, out: Path) -> list[str]
 
 
 def run_ea(args: argparse.Namespace, parents: int, seed: int) -> None:
-    out = ea_result_dir(args.results, parents, seed)
+    out= ea_result_dir(args.results, parents, seed)
     if not should_run(out, args.force):
         return
-    ea_args = ea.build_parser().parse_args(
+    ea_args =ea.build_parser().parse_args(
         ["--parents", str(parents), *experiment_args(args, seed, out)],
     )
     ea.run(ea_args)
-
 
 def run_baseline(args: argparse.Namespace, seed: int) -> None:
     out = baseline_result_dir(args.results, seed)
@@ -67,7 +65,6 @@ def run_baseline(args: argparse.Namespace, seed: int) -> None:
         experiment_args(args, seed, out),
     )
     baseline.run(baseline_args)
-
 
 def run_evaluation(results: Path) -> None:
     statistics.run(argparse.Namespace(
@@ -89,8 +86,10 @@ def run(args: argparse.Namespace) -> None:
     run_evaluation(args.results)
 
 
+
 def main() -> None:
     run(build_parser().parse_args())
+
 
 
 if __name__ == "__main__":
