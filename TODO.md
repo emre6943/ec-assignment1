@@ -84,20 +84,27 @@ Measured behaviour with k = 3 over 500 seeds: 45 % of children draw from all thr
 Ideas if block B wants to go further (none are required): mix at nodes deeper than the core,
 or a majority-vote / diagonal scheme across all k parents instead of an independent per-face pick.
 
-## C. Code — baseline + plots
+## C. Code — baseline + plots  — ✅ DONE 2026-09-18, all 20 runs executed
 
-- [ ] `baseline.py --seed s`: 5 050 random trees (`random_tree(19)` — module count includes the
-      core, so 19 gives ≤ 20 nodes like the EA), track best-so-far every 50 evaluations; point i
-      ↔ 50·i evals ↔ EA generation i−1 (the EA logs gen 0 as the initial population)
-- [ ] read `results/k*/seed*/log.csv` by column name: `gen,evals,best,mean,worst,diversity,
-      fallbacks,cap_fallbacks`, 101 rows per run (gen 0..100)
-- [ ] `plot.py`: reads every CSV in `results/`, one line per variant (k=2, 4, 8, random),
-      mean over seeds with shaded ±1 std, x = generation, y = fitness. Also a diversity plot if B
-      logs it
-- [ ] `stats.py`: final best fitness per run, table of mean ± std per variant, Mann–Whitney U
-      between k=2 and each other k (5 samples each, so report the p-value but do not oversell it)
-- [ ] `run_all.sh`: launches 3 variants × 5 seeds + 5 baseline seeds, outputs to
-      `results/<variant>/seed<s>.csv`
+Landed in commit `1b00508` under different filenames than planned: a `baseline/` package
+instead of `baseline.py`, an `evaluation/` package instead of `plot.py` + `stats.py`, and
+`run_all.py` instead of `run_all.sh`.
+
+- [x] `baseline/` — random search, `random_tree(19)` so the module count matches the EA's cap,
+      best-so-far logged on the same `evals` grid as the EA
+- [x] reads `results/*/seed*/log.csv` by column name, 101 rows per run (gen 0..100)
+- [x] `evaluation/plot.py` — one line per variant (k=2, 4, 8, random), mean over seeds with
+      shaded ±1 std, x = evaluations, y = best fitness → `results/plots/fitness.png`
+- [x] `evaluation/statistics.py` — final best fitness per run, mean ± std per variant
+      → `results/summary.csv`
+- [x] `run_all.py` — 3 variants × 5 seeds + 5 baseline seeds, then the evaluation, in one
+      command. Skips runs whose `log.csv` exists; `--force` recomputes
+- [ ] **Still missing: the Mann–Whitney U test** between k=2 and each other k. `statistics.py`
+      reports mean ± std only. Given the result below it would not change the conclusion, but
+      the report should either include it or say plainly that n=5 does not support it
+- [ ] **Still missing: the diversity plot.** The column is logged, nothing plots it
+- [ ] **Worth adding: an evals-to-threshold plot.** That is where the actual k effect lives
+      (see the results below) and the fitness plot does not show it clearly
 
 Three things `ea.py` already decided for you:
 - **Align the baseline on the `evals` column, not on `gen`.** The EA logs gen 0 at 50 evals, so
@@ -136,28 +143,83 @@ Three things `ea.py` already decided for you:
 
 ---
 
-## What we already know from `ea.py` (2026-09-17)
+## THE RESULTS (2026-09-18, all 20 runs, `results/summary.csv`)
 
-Measured on a full default run (k=2, seed 1, 5 050 evaluations, 11 s):
+Full experiment: 3 variants × 5 seeds + 5 baseline seeds, 5 050 evaluations each, 4m17s total.
 
-| | gen 0 | gen 10 | gen 30 | gen 60 | gen 100 |
-|---|---|---|---|---|---|
-| best | 17.70 | 14.03 | 13.28 | 12.87 | **12.63** |
-| diversity | 18.45 | 6.74 | 1.86 | 1.52 | 1.26 |
+### Final best fitness — the EA crushes the baseline, k makes no difference
 
-- **The fitness floor is ~15.75** by the README's own reading (the targets' mean pairwise
-  distance), and we are already at 12.63. Good — the EA works.
-- ⚠️ **Diversity collapses by generation 30** and barely moves after. If all three k variants
-  flatten that early, the k comparison has ~30 useful generations and 70 of noise, and the
-  "more parents → more diversity" half of the hypothesis may be untestable as configured.
-  **Worth a 3-seed spot check before committing to all 20 runs**, because the fix (weaker
-  selection pressure, or μ,λ instead of μ+λ) is a settings change we want to make *before* the
-  real runs, not after. If we change it, it changes for all variants equally — k stays the only
-  variable.
-- `fallbacks` and `cap_fallbacks` are **0** across 5 050 evaluations. The safety nets exist but
-  never fire, so the operator never degenerates. That is a reportable number for Methods.
-- Runs are **deterministic across processes** — the same flags give byte-identical `log.csv` and
+| variant | n | mean final best | std |
+|---|---|---|---|
+| k=2 | 5 | **12.378** | 0.421 |
+| k=4 | 5 | 12.606 | 0.505 |
+| k=8 | 5 | 12.518 | 0.646 |
+| random | 5 | 16.439 | 0.163 |
+
+- **The baseline comparison is unambiguous.** Every EA seed beats every random seed by a wide
+  margin (~3.9 distance units). Random flatlines at ~16.5 by 1 000 evaluations; the EA is already
+  below 13 there. This is the easy half of the report.
+- **The k comparison is a null result on final fitness.** The three means span 0.23 while the
+  within-variant std is 0.42–0.65 — seed spread is 2–3× the effect. Per-seed finals overlap
+  completely (k=4's best seed, 11.77, beats every k=2 seed). Do not claim a winner.
+
+### Convergence speed — this is where k actually shows up
+
+Evaluations needed to first reach best ≤ 13.0:
+
+| variant | mean | std | per-seed |
+|---|---|---|---|
+| k=2 | 1 850 | 1 305 | 1250, 1100, 3950, 700, 2250 |
+| k=4 | 1 313 | 779 | 2400, 550, 1200, 1100 |
+| k=8 | **688** | **48** | 750, 650, 650, 700 |
+
+k=8 converges **2.7× faster than k=2 with 27× less variance** — 650–750 evaluations on every
+single seed, while one k=2 seed took 3 950. **This is the headline result, not the fitness
+table.** More parents does not raise the ceiling; it makes every recombination reliably
+productive instead of occasionally a clone, so the early search is faster and far more
+consistent.
+
+### Why the ceiling does not move — the 4-face cap
+
+`CORE_FACES` has 4 entries, so **at most 4 parents can ever contribute to one child**, whatever
+k is. Measured over 3 000 recombinations:
+
+| k | distinct parents picked | actually donated | P(child is a clone of one parent) = 1/k³ | P(a drawn parent contributes nothing) |
+|---|---|---|---|---|
+| 2 | 1.88 | 1.72 | 12.5 % | 6.2 % |
+| 4 | 2.74 | 2.30 | 1.6 % | 31.6 % |
+| 8 | 3.30 | 2.66 | 0.2 % | 58.6 % |
+
+At k=8, 58.6 % of the parents we carefully draw as distinct contribute nothing at all. k=4 and
+k=8 are very nearly the same operator, which is exactly why their final fitness is
+indistinguishable.
+
+### ⚠️ The hypothesis needs rewording before Methods is written
+
+> "too many parents disrupts useful genetic structure and therefore reduces convergence"
+
+**This operator is structurally non-disruptive.** Every face receives one whole, coherent
+subtree; it never splices two parents' branches together or breaks a limb mid-way. The
+disruption mechanism the hypothesis predicts largely *cannot occur here*. The data agrees: no
+degradation at k=8, and it converges fastest. Write the hypothesis knowing this, and report the
+refutation with its mechanism — that scores better than a vague confirmation.
+
+### Other measured facts for Methods
+
+- **Diversity collapses to ~0.1–0.2 for every variant** well before the budget ends, so roughly
+  3 500 of the 5 050 evaluations are spent after the search has stopped moving. This is why
+  final fitness cannot separate the variants, and it is worth one honest sentence in Discussion.
+  (The 2026-09-17 worry that this made the k comparison untestable was half right: it killed the
+  *final fitness* comparison, and the effect surfaced in convergence speed instead.)
+- **`fallbacks` = 0 across all 15 EA runs.** The operator's safety net never fired once. Same for
+  `cap_fallbacks`. Reportable.
+- `forced_mutations` ≈ 190–210 per run, i.e. ~4 % of children were clones that also lost the
+  mutation coin flip and were mutated anyway.
+- Runs are **deterministic across processes** — same flags give byte-identical `log.csv` and
   `best.json` under four different `PYTHONHASHSEED` values.
+- ⚠️ **`results/` is gitignored**, so these numbers exist only on Emre's machine. Block E's
+  hand-in list requires `results/` in the zip — either un-ignore it before submitting or have
+  whoever zips it re-run `run_all.py` (4 minutes).
 
 ## Timeline
 
@@ -165,8 +227,8 @@ Measured on a full default run (k=2, seed 1, 5 050 evaluations, 11 s):
 |---|---|
 | Tue 16 | ✅ A written. B's operator written too (reference impl). ⬜ Roles for C/D/E still unassigned, Overleaf not started |
 | Wed 17 | ✅ A + B reviewed, 10 tests green, full run verified. ⬜ C not started — **this is the critical path** |
-| Thu 18 | `run_all.sh` launched (all 20 runs). D writes Intro + Methods |
-| Fri 19 | Results in. C produces figures + stats. D writes Results |
+| Thu 18 | ✅ C landed and all 20 runs executed; results + plot below. ⬜ D still unstarted — **now the critical path** |
+| Fri 19 | D writes Intro + Methods + Results against the numbers below. C adds the evals-to-threshold plot and the U test |
 | Sat 20 | Full draft, everyone reads it. Fix, trim to 3 pages, contributions |
 | Sun 21 | Final PDF, zip, submit. Do not leave it for Monday morning |
 

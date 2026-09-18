@@ -27,9 +27,12 @@ reach against the whole set.
     tree_edit_distance.py  the distance and the fitness function
     target_bodies/         the five target graphs as networkx DiGraph JSON
 
-All three are the unmodified course copies from the ARIEL fork at
+All three come from the ARIEL fork at
 github.com/AndrzejSzczepura/EvolutionaryComputing2026. Our own work goes in new
-files alongside them.
+files alongside them. The only edit we have made to any of them is
+`A1_template_2026.py` line 86, `MODE = "video"` instead of `"frame"`, which
+changes how the demo renders and nothing else; `tree_edit_distance.py` and the
+five target graphs are byte-identical to the course copies.
 
 ## Setup
 
@@ -78,13 +81,19 @@ Our code, next to the course files:
                      tree_edit_distance.py, one CLI flag per experiment setting
     recombine.py     face-aligned multi-parent recombination (block B owns it;
                      the signature is fixed, the internals may change)
+    constants.py     settings shared by the EA, the baseline and the evaluation
+    metrics.py       mean pairwise tree edit distance, used by both diagnostics
+    result_files.py  writes best.json and config.json for a run
+    baseline/        random search at the same evaluation budget (block C)
+    evaluation/      statistics.py and plot.py over results/ (block C)
+    run_all.py       runs every variant, every seed, then the evaluation (block C)
     tests/           pytest: 8 operator unit tests + 2 EA tests
 
-Both are complete and tested. Still missing: `baseline.py`, `plot.py`,
-`stats.py` and `run_all.sh` (block C), and the report (block D).
+Blocks A, B and C are complete and tested. Still missing: the report (block D)
+and the hand-in (block E).
 
 One EA run, all defaults (k=2, seed 1, pop 50, 100 generations, cap 20 modules,
-tournament 3, p_xo 0.7):
+tournament 3, p_xo 0.8, p_mut 0.8, immigrants 0.01):
 
     uv run --project ../ariel python ea.py
 
@@ -95,9 +104,18 @@ lands in `results/k<K>/seed<S>/` unless `--out` says otherwise:
     uv run --project ../ariel python ea.py --pop 10 --gens 5 --out /tmp/smoke   # ~1 s
 
 Flags: `--parents K` (2), `--seed S` (1), `--pop` (50), `--gens` (100),
-`--max-modules` (20, core included), `--tournament` (3), `--pxo` (0.7),
-`--out DIR`. `random`, `numpy` and `torch` are all seeded from `--seed`; the
-same seed reproduces the same `log.csv`.
+`--max-modules` (20, core included), `--tournament` (3), `--pxo` (0.8),
+`--pmut` (0.8), `--immigrants` (0.01), `--out DIR`. `random`, `numpy` and
+`torch` are all seeded from `--seed`; the same seed reproduces the same
+`log.csv`.
+
+The whole experiment - 3 variants x 5 seeds, plus 5 baseline seeds, then the
+summary table and the convergence plot - is one command:
+
+    uv run --project ../ariel python run_all.py
+
+It skips any run whose `log.csv` already exists, so it is safe to re-run; pass
+`--force` to recompute. It takes about 4 minutes.
 
 Each run writes:
 
@@ -110,7 +128,11 @@ Each run writes:
                   evolution), fallbacks (cumulative count of recombinations
                   that had to fall back to parent 0), cap_fallbacks (cumulative
                   count of children replaced by a parent clone because 20
-                  shrink mutations could not get them under the module cap)
+                  shrink mutations could not get them under the module cap),
+                  forced_mutations (cumulative count of children that were
+                  cloned rather than recombined AND lost the mutation coin
+                  flip, and so were mutated anyway to stop them being exact
+                  duplicates of their parent)
     best.json     the best genome of the run as a TreeGenome dict
     config.json   the CLI arguments the run was started with
     database.db   ariel.ec's SQLite log of every individual, every generation
@@ -121,9 +143,9 @@ experiment - 3 variants x 5 seeds, plus the baseline - is a few minutes rather
 than an overnight job.
 
 The output directory is built from `--parents` and `--seed` only. `--pop`,
-`--gens` and `--pxo` do not appear in it, so two runs differing only in those
-would overwrite each other; pass `--out` explicitly when sweeping anything
-other than k and the seed.
+`--gens`, `--pxo`, `--pmut` and `--immigrants` do not appear in it, so two runs
+differing only in those would overwrite each other; pass `--out` explicitly when
+sweeping anything other than k and the seed.
 
 Reproducibility: the same flags give a byte-identical `log.csv` and
 `best.json` across separate processes and across different `PYTHONHASHSEED`
@@ -144,10 +166,13 @@ hidden draw was enough to make a run into a reused directory diverge from a
 run into a fresh one. Do not print paths through Rich while a run is in
 progress for the same reason.
 
-Parents are drawn from the tournament winners weighted by the number of
-tournaments each won, but an individual is never used twice in one
-recombination unless fewer than k distinct winners exist, so "k parents"
-really means k different genomes.
+Parent slots are filled mostly by tournament, but `--immigrants` reserves a
+fraction of them - ceiling, so the 1 % default is 1 slot of 50, not 0 - for
+individuals drawn uniformly at random with fitness ignored, so a weak but
+structurally different body can still breed. Parents for a recombination are
+then drawn from that pool weighted by how many slots each individual holds, and
+an individual is never used twice in one recombination unless fewer than k
+distinct individuals exist, so "k parents" really means k different genomes.
 
 The operator's core faces come from ARIEL's own
 `ALLOWED_FACES[ModuleType.CORE]` rather than a hardcoded list, so if the course
