@@ -1,23 +1,3 @@
-"""EC Assignment 1 - the EA (block A).
-
-Evolves ARIEL tree genomes towards the five target bodies in ``target_bodies/``
-using the course fitness: mean tree edit distance to the targets plus one
-standard deviation, lower is better.
-
-The single experimental variable is ``--parents``: how many parents the
-face-aligned recombination in ``recombine.py`` draws from. Every other setting
-is fixed by the CLI defaults, which match the team task list.
-
-Two conventions that the logs and the report depend on:
-
-* Generation 0 is the evaluated initial population, so ``--gens G`` writes
-  G + 1 rows and ``evals == pop * (gen + 1)`` holds on every row.
-* A module is a node of the tree, core included, so ``--max-modules 20`` means
-  at most 20 nodes.
-
-``run(args)`` is importable for tests; ``main()`` only parses the CLI.
-"""
-
 import argparse
 import copy
 import csv
@@ -65,42 +45,29 @@ from metrics import mean_pairwise_tree_distance
 from result_files import save_genome_outputs
 from recombine import module_count, recombine
 from tree_edit_distance import mean_plus_std_tree_edit_distance
-
-HERE = Path(__file__).parent
-
-console = Console()
-
-
+HERE =Path(__file__).parent
+console= Console()
 def load_targets(target_dir: Path = TARGET_DIR) -> list[nx.DiGraph]:
-    paths = sorted(target_dir.glob("*.json"))
+    paths=sorted(target_dir.glob("*.json"))
     if not paths:
-        msg = f"no target bodies found in {target_dir}"
+        msg=f"no target bodies found in {target_dir}"
         raise FileNotFoundError(msg)
     return [load_graph_from_json(path) for path in paths]
-
-
 def fitness_function(body: nx.DiGraph, targets: list[nx.DiGraph]) -> float:
-    """Score one body against the whole target set. Lower is better."""
     return mean_plus_std_tree_edit_distance(body, targets)
 
-
 def genome_of(individual: Individual) -> TreeGenome:
-    """Return a genome sharing nothing with the individual's stored dict.
-
-    ``TreeGenome.from_dict`` keeps a reference to the ``edges`` list it is
-    given, so without the deep copy a mutation on a child would rewrite its
-    parent's genotype in place.
-    """
     return TreeGenome.from_dict(copy.deepcopy(individual.genotype))
 
 
-def new_individual(genome: TreeGenome) -> Individual:
-    individual = Individual()
-    individual.genotype = genome.to_dict()
-    individual.tags["ps"] = False
-    individual.tags["ps_wins"] = 0
-    return individual
 
+
+def new_individual(genome: TreeGenome) -> Individual:
+    individual =Individual()
+    individual.genotype =genome.to_dict()
+    individual.tags["ps"]= False
+    individual.tags["ps_wins"] =0
+    return individual
 
 def is_valid(genome: TreeGenome) -> bool:
     try:
@@ -110,111 +77,88 @@ def is_valid(genome: TreeGenome) -> bool:
     return True
 
 
-class Experiment:
-    """One EA run: the configuration plus the operations as bound methods."""
 
+class Experiment:
     def __init__(self, args: argparse.Namespace, out: Path) -> None:
-        self.args = args
-        self.out = out
-        self.rng = random.Random(args.seed)
-        # A separate stream, so switching the diagnostic on or off cannot
-        # change the evolution.
-        self.diversity_rng = random.Random(args.seed + DIVERSITY_SEED_OFFSET)
-        self.targets = load_targets()
-        self.generation = 0
-        self.evals = 0
-        self.cap_fallbacks = 0
-        self.log_path = out / "log.csv"
-        self.started_at = time.time()
+        self.args =args
+        self.out= out
+        self.rng= random.Random(args.seed)
+        self.diversity_rng =random.Random(args.seed + DIVERSITY_SEED_OFFSET)
+        self.targets=load_targets()
+        self.generation =0
+        self.evals=0
+        self.cap_fallbacks= 0
+        self.log_path =out / "log.csv"
+        self.started_at= time.time()
+
 
         with self.log_path.open("w", newline="") as handle:
             csv.writer(handle).writerow(LOG_COLUMNS)
 
     def initial_population(self) -> Population:
-        population = Population.empty()
+        population =Population.empty()
         for _ in range(self.args.pop):
-            # random_tree(n) adds up to n non-core modules, so n = cap - 1
-            # keeps the whole tree, core included, at or under the cap.
-            genome = random_tree(self.args.max_modules - 1)
+            genome =random_tree(self.args.max_modules -1)
             population.append(new_individual(genome))
         return population
-
     def tournament(self, candidates: list[Individual]) -> Individual:
-        """Run one tournament. ``min`` wins because lower fitness is better."""
         size = min(self.args.tournament, len(candidates))
         contestants = self.rng.sample(candidates, size)
         return min(contestants, key=lambda individual: individual.fitness)
-
     def parent_selection(self, population: Population) -> Population:
-        """Run ``pop`` tournaments and tag the winners on the individuals.
-
-        ARIEL operations must take and return a ``Population``, so the winners
-        are recorded as tags rather than returned: ``ps`` marks a winner and
-        ``ps_wins`` counts how many tournaments it took. ``mating_pool`` turns
-        those counts back into a list, which is where selection pressure
-        actually comes from.
-        """
-        alive = population.alive.to_list()
+        alive =population.alive.to_list()
         for individual in alive:
-            individual.tags["ps"] = False
+            individual.tags["ps"] =False
             individual.tags["ps_wins"] = 0
         for _ in range(self.args.pop):
             winner = self.tournament(alive)
-            winner.tags["ps"] = True
-            winner.tags["ps_wins"] = int(winner.tags.get("ps_wins", 0)) + 1
+            winner.tags["ps"] =True
+            winner.tags["ps_wins"]= int(winner.tags.get("ps_wins",0)) + 1
         return population
 
     def mating_pool(self, population: Population) -> list[Individual]:
-        """List every tournament winner once per win it scored."""
-        pool: list[Individual] = []
+        pool: list[Individual] =[]
         for individual in population.alive:
             if individual.tags.get("ps"):
-                wins = int(individual.tags.get("ps_wins", 1))
-                pool.extend([individual] * wins)
+                wins= int(individual.tags.get("ps_wins", 1))
+                pool.extend([individual] *wins)
         if not pool:
-            console.log("[yellow]no tagged parents - using whole population[/yellow]")
-            pool = population.alive.to_list()
+            console.log("[yellow]no tagged parents -using whole population[/yellow]")
+            pool= population.alive.to_list()
         return pool
 
     def pick_mutation(self) -> str:
-        """Roulette over ``MUTATION_PROBABILITIES`` using cumulative bounds."""
-        roll = self.rng.random()
-        cumulative = 0.0
+        roll =self.rng.random()
+        cumulative=0.0
         for name, probability in MUTATION_PROBABILITIES:
             cumulative += probability
-            if roll < cumulative:
+            if roll <cumulative:
                 return name
         return MUTATION_PROBABILITIES[-1][0]
 
+
+
     def mutate_once(self, genome: TreeGenome) -> None:
-        mutation = self.pick_mutation()
-        if mutation == "point":
+        mutation= self.pick_mutation()
+        if mutation== "point":
             mutate_replace_node(genome)
-        elif mutation == "subtree":
+        elif mutation =="subtree":
             mutate_subtree_replacement(genome, max_modules=self.args.max_modules)
-        elif mutation == "shrink":
+        elif mutation =="shrink":
             mutate_shrink(genome)
         else:
             mutate_hoist(genome)
 
     def enforce_cap(self, genome: TreeGenome) -> bool:
-        """Shrink until under the module cap. False if it gave up."""
         for _ in range(MAX_SHRINK_ATTEMPTS):
-            if module_count(genome) <= self.args.max_modules:
+            if module_count(genome)<= self.args.max_modules:
                 return True
             mutate_shrink(genome)
-        return module_count(genome) <= self.args.max_modules
+        return module_count(genome)<= self.args.max_modules
 
     def draw_parents(self, pool: list[Individual], count: int) -> list[Individual]:
-        """Draw ``count`` distinct individuals from the win-weighted pool.
-
-        A plain ``sample`` would return the same individual twice, quietly
-        turning a k-parent recombination into a (k-1)-parent one. Each draw is
-        still weighted by wins, but a chosen individual leaves the pool.
-        Repeats are only allowed when fewer than ``count`` winners exist.
-        """
-        remaining = list(pool)
-        chosen: list[Individual] = []
+        remaining =list(pool)
+        chosen: list[Individual]= []
         while remaining and len(chosen) < count:
             pick = self.rng.choice(remaining)
             chosen.append(pick)
